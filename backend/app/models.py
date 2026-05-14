@@ -1,23 +1,24 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Any, Dict, List, Optional
 
 
 class ConnectionConfig(BaseModel):
     engine: str
-    config: Dict[str, Any]
+    config: Optional[Dict[str, Any]] = None
 
 
 class QueryRequest(BaseModel):
     engine: str
     sql: str
     config: Optional[Dict[str, Any]] = None
-    limit: int = 100
+    limit: int = Field(default=100, ge=1, le=1000)
 
 
 class QueryResponse(BaseModel):
     engine: str
-    status: str
+    success: bool
     runtime_ms: float
     columns: List[str]
-    rows: List[Dict[str, Any]]
-    error: Optional[str] = None
+    rows: List[Any]
+    row_count: int = 0
+    message: Optional[str] = None
