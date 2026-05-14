@@ -12,6 +12,13 @@ def _int_env(name: str, default: int) -> int:
 class Settings:
     ACTIVE_ENGINE = os.getenv("ACTIVE_ENGINE", "clickhouse")
 
+    BIGQUERY_PROJECT_ID = os.getenv("BIGQUERY_PROJECT_ID")
+    BIGQUERY_DATASET = os.getenv("BIGQUERY_DATASET")
+
+    GOOGLE_APPLICATION_CREDENTIALS = os.getenv(
+    "GOOGLE_APPLICATION_CREDENTIALS"
+)
+
     # -----------------------------------
     # ClickHouse
     # -----------------------------------

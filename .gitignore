@@ -5,4 +5,8 @@ __pycache__/
 dist/
 build/
 .pytest_cache/
-*.pyc
+*.pycbackend/secrets/
+backend/.env
+
+backend/secrets/
+backend/.env

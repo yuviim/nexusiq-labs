@@ -16,8 +16,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { useLab } from "../context/LabContext";
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+import { testConnection } from "../services/connectionApi";
 
 const engines = [
   {
@@ -32,15 +31,25 @@ const engines = [
     id: "snowflake",
     name: "Snowflake",
     type: "Cloud Warehouse",
-    status: "Not configured",
+    status: "Configured",
     color: "sky",
-    fields: ["account", "warehouse", "database", "schema", "user", "password"],
+    fields: [
+      "account",
+      "warehouse",
+      "database",
+      "schema",
+      "role",
+      "user",
+      "password",
+      "passcode",
+      "authenticator",
+    ],
   },
   {
     id: "clickhouse",
     name: "ClickHouse",
     type: "Realtime Analytics",
-    status: "Not configured",
+    status: "Configured",
     color: "yellow",
     fields: ["host", "port", "database", "user", "password"],
   },
@@ -72,25 +81,28 @@ const engines = [
 
 const defaultValues = {
   exasol: {
-    host: "localhost",
+    host: "",
     port: "8563",
     user: "sys",
     password: "",
-    schema: "RETAIL",
+    schema: "",
   },
   snowflake: {
     account: "",
     warehouse: "",
     database: "",
     schema: "",
+    role: "",
     user: "",
     password: "",
+    passcode: "",
+    authenticator: "snowflake",
   },
   clickhouse: {
     host: "",
     port: "8443",
     database: "",
-    user: "",
+    user: "default",
     password: "",
   },
   databricks: {
@@ -107,7 +119,7 @@ const defaultValues = {
   },
   trino: {
     host: "",
-    port: "8080",
+    port: "443",
     catalog: "",
     schema: "",
     user: "",
@@ -133,7 +145,26 @@ function EngineIcon({ engine }) {
   return <Database size={17} />;
 }
 
-function FieldInput({ label, value, onChange, secret }) {
+function FieldInput({ label, value, onChange, secret, engineId }) {
+  if (engineId === "snowflake" && label === "authenticator") {
+    return (
+      <div>
+        <label className="text-[11px] font-medium text-slate-500">
+          authenticator
+        </label>
+
+        <select
+          value={value || "snowflake"}
+          onChange={(e) => onChange(e.target.value)}
+          className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-[12px] text-slate-700 outline-none transition focus:border-violet-300 focus:bg-white"
+        >
+          <option value="snowflake">Password</option>
+          <option value="externalbrowser">External Browser / SSO / MFA</option>
+        </select>
+      </div>
+    );
+  }
+
   return (
     <div>
       <label className="text-[11px] font-medium text-slate-500">{label}</label>
@@ -177,7 +208,7 @@ export default function SettingsConnections() {
     }));
   }
 
-  async function testConnection() {
+  async function handleTestConnection() {
     setTesting(true);
     setTestResult(null);
 
@@ -185,27 +216,15 @@ export default function SettingsConnections() {
       const selectedValues = connectionValues[selectedEngine.id] || {};
       const payload = buildConnectionPayload(selectedEngine.id, selectedValues);
 
-      const response = await fetch(`${API_BASE_URL}/connections/test`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data?.detail || "Connection test failed");
-      }
+      const result = await testConnection(payload);
 
       setTestResult({
-        success: Boolean(data.success),
+        success: Boolean(result.success),
         message:
-          data.message ||
+          result.message ||
           `${selectedEngine.name} connection test completed successfully.`,
-        latency_ms: data.latency_ms,
-        engine: data.engine || selectedEngine.id,
+        latency_ms: result.latency_ms || result.runtime_ms,
+        engine: result.engine || selectedEngine.id,
       });
     } catch (error) {
       setTestResult({
@@ -229,8 +248,10 @@ export default function SettingsConnections() {
 
   function activateEngine() {
     setActiveEngine({
+      id: selectedEngine.id,
       name: selectedEngine.name,
       role: selectedEngine.type,
+      config: connectionValues[selectedEngine.id] || {},
     });
   }
 
@@ -342,11 +363,11 @@ export default function SettingsConnections() {
               </div>
 
               <div className="mt-1 text-[18px] font-semibold text-slate-950">
-                {activeEngine?.name || "Exasol"}
+                {activeEngine?.name || "ClickHouse"}
               </div>
 
               <div className="mt-1 text-[12px] text-slate-500">
-                {activeEngine?.role || "Analytics Speed Layer"}
+                {activeEngine?.role || "Realtime Analytics"}
               </div>
             </div>
           </div>
@@ -375,6 +396,7 @@ export default function SettingsConnections() {
                 <FieldInput
                   key={field}
                   label={field}
+                  engineId={selectedEngine.id}
                   value={selectedValues[field] || ""}
                   secret={
                     field.toLowerCase().includes("password") ||
@@ -391,7 +413,7 @@ export default function SettingsConnections() {
 
             <div className="mt-5 flex flex-wrap gap-2">
               <button
-                onClick={testConnection}
+                onClick={handleTestConnection}
                 disabled={testing}
                 className="flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-[12px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
               >

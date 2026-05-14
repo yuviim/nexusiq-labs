@@ -7,6 +7,7 @@ from .clickhouse_adapter import ClickHouseAdapter
 from .exasol_adapter import ExasolAdapter
 from .snowflake_adapter import SnowflakeAdapter
 from .databricks_adapter import DatabricksAdapter
+from .bigquery_adapter import BigQueryAdapter
 
 def get_adapter(engine: str, config: Dict[str, Any] | None = None):
     engine_key = (engine or "").lower()
@@ -24,6 +25,9 @@ def get_adapter(engine: str, config: Dict[str, Any] | None = None):
     
     if engine_key == "databricks":
         return DatabricksAdapter(resolved_config)
+    
+    if engine_key == "bigquery":
+        return BigQueryAdapter(resolved_config)
 
     # Temporary fallback adapters
     if engine_key in [

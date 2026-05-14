@@ -12,57 +12,68 @@ import PageHeader from "../components/common/PageHeader";
 import SectionCard from "../components/common/SectionCard";
 import SQLEditor from "../components/sql/SQLEditor";
 import { useLab } from "../context/LabContext";
-import { runQuery } from "../api/client";
+import { runQuery } from "../services/connectionApi";
 
 const suggestedQuestions = [
-  "Which product categories have the highest revenue growth in 2025?",
-  "Compare BI dashboard latency by region",
-  "Analyze lakehouse query acceleration opportunities",
-  "Find slow-moving product categories",
-  "Generate semantic revenue insights",
+  "Compare AI provider latency and cost",
+  "Analyze regional AI traffic",
+  "Find most expensive AI models",
+  "Find failed AI requests",
+  "Generate semantic AI workload insights",
 ];
 
 const generatedQueries = {
   revenue: `SELECT
-  region,
-  product_category,
-  SUM(revenue) AS total_revenue,
-  AVG(order_value) AS avg_order_value,
-  COUNT(*) AS total_orders
-FROM retail_sales
-WHERE order_date >= DATE '2025-01-01'
-GROUP BY 1, 2
-ORDER BY total_revenue DESC;`,
+    provider,
+    count(*) AS total_requests,
+    round(avg(latency_ms), 2) AS avg_latency_ms,
+    sum(total_tokens) AS total_tokens_processed,
+    round(sum(cost_usd), 3) AS total_cost_usd
+FROM ai_gateway_logs
+GROUP BY provider
+ORDER BY total_requests DESC;`,
 
   latency: `SELECT
-  region,
-  AVG(dashboard_latency_ms) AS avg_latency,
-  AVG(query_runtime_ms) AS avg_query_runtime
-FROM bi_dashboard_metrics
-GROUP BY 1
-ORDER BY avg_latency ASC;`,
+    region,
+    count(*) AS requests,
+    round(avg(latency_ms), 2) AS avg_latency_ms,
+    round(sum(cost_usd), 3) AS total_cost_usd
+FROM ai_gateway_logs
+GROUP BY region
+ORDER BY requests DESC;`,
 
   lakehouse: `SELECT
-  dataset_name,
-  scan_size_gb,
-  query_runtime_seconds,
-  acceleration_candidate
-FROM lakehouse_runtime_metrics
-WHERE acceleration_candidate = TRUE
-ORDER BY query_runtime_seconds DESC;`,
+    model_name,
+    provider,
+    round(avg(latency_ms), 2) AS avg_latency_ms,
+    round(sum(cost_usd), 3) AS total_cost_usd
+FROM ai_gateway_logs
+GROUP BY model_name, provider
+ORDER BY total_cost_usd DESC;`,
 
   inventory: `SELECT
-  product_category,
-  product_name,
-  SUM(quantity_sold) AS units_sold,
-  SUM(revenue) AS total_revenue,
-  AVG(days_in_inventory) AS avg_inventory_days
-FROM retail_sales
-WHERE order_date >= DATE '2025-01-01'
-GROUP BY 1, 2
-HAVING SUM(quantity_sold) < 1000
-ORDER BY avg_inventory_days DESC;`,
+    provider,
+    model_name,
+    status_code,
+    count(*) AS failed_requests
+FROM ai_gateway_logs
+WHERE status_code != 200
+GROUP BY provider, model_name, status_code
+ORDER BY failed_requests DESC;`,
 };
+
+function normalizeEngineId(engine) {
+  const name = (engine?.id || engine?.name || "clickhouse").toLowerCase();
+
+  if (name.includes("clickhouse")) return "clickhouse";
+  if (name.includes("snowflake")) return "snowflake";
+  if (name.includes("databricks")) return "databricks";
+  if (name.includes("bigquery")) return "bigquery";
+  if (name.includes("trino")) return "trino";
+  if (name.includes("exasol")) return "exasol";
+
+  return "clickhouse";
+}
 
 export default function AISQLLab() {
   const { engines, activeEngine, setActiveEngine } = useLab();
@@ -70,24 +81,43 @@ export default function AISQLLab() {
   const [question, setQuestion] = useState(suggestedQuestions[0]);
   const [generatedSql, setGeneratedSql] = useState(generatedQueries.revenue);
 
-  const [queryResults, setQueryResults] = useState([]);
+  const [queryResults, setQueryResults] = useState({
+    columns: [],
+    rows: [],
+  });
+
   const [runtime, setRuntime] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  function resetResults() {
+    setQueryResults({
+      columns: [],
+      rows: [],
+    });
+    setRuntime(null);
+    setError(null);
+  }
 
   function generateSQL(text) {
     const lower = text.toLowerCase();
 
     setQuestion(text);
-    setQueryResults([]);
-    setRuntime(null);
-    setError(null);
+    resetResults();
 
-    if (lower.includes("latency")) {
+    if (lower.includes("region") || lower.includes("traffic") || lower.includes("latency")) {
       setGeneratedSql(generatedQueries.latency);
-    } else if (lower.includes("lakehouse") || lower.includes("acceleration")) {
+    } else if (
+      lower.includes("expensive") ||
+      lower.includes("model") ||
+      lower.includes("cost")
+    ) {
       setGeneratedSql(generatedQueries.lakehouse);
-    } else if (lower.includes("slow-moving") || lower.includes("inventory")) {
+    } else if (
+      lower.includes("failed") ||
+      lower.includes("error") ||
+      lower.includes("status")
+    ) {
       setGeneratedSql(generatedQueries.inventory);
     } else {
       setGeneratedSql(generatedQueries.revenue);
@@ -95,48 +125,54 @@ export default function AISQLLab() {
   }
 
   async function executeQuery() {
-  try {
-    setLoading(true);
-    setError(null);
-    setQueryResults([]);
-    setRuntime(null);
+    try {
+      setLoading(true);
+      setError(null);
+      setQueryResults({
+        columns: [],
+        rows: [],
+      });
+      setRuntime(null);
 
-    const response = await runQuery({
-      engine: "clickhouse",
-      sql: generatedSql,
-      config: {
-        host: "kpu62rmyan.ap-south-1.aws.clickhouse.cloud",
-        port: 8443,
-        database: "nexusiq_lab",
-        user: "default",
-        password: "YOUR_CLICKHOUSE_PASSWORD",
-      },
-      limit: 20,
-    });
+      const engineId = normalizeEngineId(activeEngine);
 
-    console.log("BACKEND RESPONSE:", response);
+      const response = await runQuery({
+        engine: engineId,
+        sql: generatedSql,
+        limit: 20,
+      });
 
-    setQueryResults(response.rows || []);
-    setRuntime(response.runtime_ms);
-  } catch (err) {
-    setError(err.message || "Query execution failed");
-  } finally {
-    setLoading(false);
+      console.log("BACKEND RESPONSE:", response);
+
+      if (!response.success) {
+        throw new Error(response.message || "Query failed");
+      }
+
+      setQueryResults({
+        columns: response.columns || [],
+        rows: response.rows || [],
+      });
+
+      setRuntime(response.runtime_ms || 0);
+    } catch (err) {
+      setError(err.message || "Query execution failed");
+    } finally {
+      setLoading(false);
+    }
   }
-}
+
+  const activeEngineName = activeEngine?.name || "ClickHouse";
 
   const aiNarrative = useMemo(() => {
-    return `The AI selected ${
-      activeEngine?.name || "Exasol"
-    } as the preferred analytical execution engine because this workload involves aggregation-heavy BI analytical patterns where acceleration and federated execution can reduce latency significantly.`;
-  }, [activeEngine]);
+    return `The AI selected ${activeEngineName} as the analytical execution engine for this workload. The query pattern focuses on AI gateway observability, provider latency, token volume, and cost analytics across modern AI workloads.`;
+  }, [activeEngineName]);
 
   return (
     <div className="space-y-4">
       <PageHeader
         badge="AI + SQL LAB"
         title="AI-Native SQL Intelligence Workspace"
-        description="Convert business questions into SQL, compare execution across analytical engines, explain query behavior, and explore Exasol AI + SQL positioning."
+        description="Convert business questions into SQL, execute them through FastAPI adapters, compare analytical engines, and explain query behavior."
       />
 
       <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -187,7 +223,10 @@ export default function AISQLLab() {
                 return (
                   <button
                     key={engine.name}
-                    onClick={() => setActiveEngine(engine)}
+                    onClick={() => {
+                      setActiveEngine(engine);
+                      resetResults();
+                    }}
                     className={`w-full rounded-2xl border px-4 py-4 text-left transition ${
                       active
                         ? "border-transparent bg-gradient-to-r from-violet-500 to-indigo-500 text-white shadow-sm"
@@ -203,7 +242,7 @@ export default function AISQLLab() {
                         active ? "text-violet-100" : "text-slate-400"
                       }`}
                     >
-                      {engine.role}
+                      {engine.role || engine.status || "Analytical Engine"}
                     </div>
                   </button>
                 );
@@ -223,8 +262,8 @@ export default function AISQLLab() {
                 </div>
 
                 <p className="mt-2 text-[12px] leading-6 text-slate-500">
-                  Aggregation-heavy BI analytical workload with federated access
-                  patterns and dashboard-oriented execution.
+                  Aggregation-heavy AI observability workload with latency,
+                  token volume, provider, and cost dimensions.
                 </p>
               </div>
 
@@ -238,8 +277,9 @@ export default function AISQLLab() {
                 </div>
 
                 <p className="mt-2 text-[12px] leading-6 text-slate-500">
-                  Exasol acceleration layer is preferred for BI acceleration and
-                  federated analytical access.
+                  Route the query through the active database adapter and return
+                  a consistent result contract: columns, rows, runtime, and
+                  execution status.
                 </p>
               </div>
             </div>
@@ -294,7 +334,7 @@ export default function AISQLLab() {
               <div className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-[12px] font-medium text-red-700">
                 {error}
               </div>
-            ) : queryResults.length === 0 ? (
+            ) : queryResults.rows.length === 0 ? (
               <div className="mt-4 rounded-xl bg-slate-50 px-4 py-3 text-[12px] text-slate-500">
                 No rows returned yet. Click Run Query to execute through FastAPI.
               </div>
@@ -303,7 +343,7 @@ export default function AISQLLab() {
                 <table className="w-full text-left text-[12px]">
                   <thead className="bg-slate-50 text-slate-500">
                     <tr>
-                      {Object.keys(queryResults[0]).map((column) => (
+                      {queryResults.columns.map((column) => (
                         <th key={column} className="px-3 py-2 font-semibold">
                           {column}
                         </th>
@@ -312,11 +352,13 @@ export default function AISQLLab() {
                   </thead>
 
                   <tbody className="divide-y divide-slate-100">
-                    {queryResults.map((row, index) => (
+                    {queryResults.rows.map((row, index) => (
                       <tr key={index} className="hover:bg-slate-50">
-                        {Object.values(row).map((value, idx) => (
+                        {row.map((value, idx) => (
                           <td key={idx} className="px-3 py-2 text-slate-700">
-                            {String(value)}
+                            {typeof value === "number"
+                              ? Number(value).toLocaleString()
+                              : String(value)}
                           </td>
                         ))}
                       </tr>
@@ -340,10 +382,10 @@ export default function AISQLLab() {
           <SectionCard title="Dataset context">
             <div className="space-y-3">
               {[
-                ["Dataset", "Retail Sales Lake"],
-                ["Rows", "50M"],
-                ["Format", "Parquet"],
-                ["Storage", "S3 / ADLS"],
+                ["Dataset", "AI Gateway Logs"],
+                ["Rows", "Live / demo scale"],
+                ["Format", "Analytical table"],
+                ["Storage", "Cloud database"],
               ].map(([label, value]) => (
                 <div
                   key={label}
@@ -364,10 +406,10 @@ export default function AISQLLab() {
           <SectionCard title="Execution summary">
             <div className="space-y-3">
               {[
-                ["Routing", activeEngine?.name || "Exasol"],
-                ["Workload", "Analytical aggregation"],
-                ["Movement", "Low"],
-                ["Federation", "Enabled"],
+                ["Routing", activeEngineName],
+                ["Workload", "AI observability analytics"],
+                ["Execution", "FastAPI adapter"],
+                ["Result contract", "Dynamic columns + rows"],
               ].map(([label, value]) => (
                 <div
                   key={label}
@@ -386,12 +428,12 @@ export default function AISQLLab() {
           <SectionCard title="Cross-engine execution comparison">
             <div className="space-y-3">
               {[
-                ["Exasol", "1.8s"],
-                ["ClickHouse", "3.9s"],
-                ["Trino", "4.8s"],
-                ["Databricks", "6.8s"],
-                ["BigQuery", "7.0s"],
-                ["Snowflake", "7.2s"],
+                ["ClickHouse", runtime !== null && activeEngineName === "ClickHouse" ? `${runtime} ms` : "Live adapter"],
+                ["Snowflake", "Live adapter"],
+                ["Databricks", "Live adapter"],
+                ["BigQuery", "Live adapter"],
+                ["Trino", "Live adapter"],
+                ["Exasol", "Live adapter"],
               ].map(([engine, time]) => (
                 <div
                   key={engine}

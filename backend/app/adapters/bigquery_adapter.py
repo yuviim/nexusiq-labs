@@ -1,41 +1,42 @@
 import time
-import pyexasol
+from google.cloud import bigquery
+from google.oauth2 import service_account
 
 
-class ExasolAdapter:
+class BigQueryAdapter:
     def __init__(self, config):
         self.config = config or {}
 
-    def _connect(self):
-        host = self.config.get("host")
-        port = self.config.get("port", 8563)
+    def _client(self):
+        credentials_path = self.config.get("credentials_path")
+        project_id = self.config.get("project_id")
 
-        return pyexasol.connect(
-            dsn=f"{host}:{port}",
-            user=self.config.get("user"),
-            password=self.config.get("password"),
-            schema=self.config.get("schema", "SYS"),
-            encryption=True,
-        )
+        if credentials_path:
+            credentials = service_account.Credentials.from_service_account_file(
+                credentials_path
+            )
+            return bigquery.Client(
+                project=project_id,
+                credentials=credentials,
+            )
+
+        return bigquery.Client(project=project_id)
 
     def test_connection(self):
         start = time.time()
 
         try:
-            conn = self._connect()
-
-            stmt = conn.execute("SELECT * FROM EXA_METADATA")
-
-            rows = stmt.fetchall()
+            client = self._client()
+            query_job = client.query("SELECT 1 AS ok")
+            rows = list(query_job.result())
 
             runtime_ms = round((time.time() - start) * 1000, 2)
 
             return {
                 "success": True,
-                "message": "Exasol SaaS connection successful",
+                "message": f"BigQuery connection successful. SELECT 1 returned {rows[0].ok}",
                 "runtime_ms": runtime_ms,
                 "latency_ms": runtime_ms,
-                "rows_preview": rows[:1],
             }
 
         except Exception as e:
@@ -50,13 +51,17 @@ class ExasolAdapter:
         start = time.time()
 
         try:
-            conn = self._connect()
+            client = self._client()
+            query_job = client.query(sql_text)
+            result = query_job.result()
 
-            stmt = conn.execute(sql_text)
+            columns = [field.name for field in result.schema]
+            rows = []
 
-            columns = stmt.column_names()
-
-            rows = stmt.fetchmany(limit)
+            for row in result:
+                rows.append([row[column] for column in columns])
+                if len(rows) >= limit:
+                    break
 
             runtime_ms = round((time.time() - start) * 1000, 2)
 
